@@ -273,11 +273,6 @@
       .toast.show {
         display: block;
       }
-
-      option {
-        background: #121a2b;
-        color: #e8eefc;
-      }
     </style>
   </head>
 
@@ -285,12 +280,12 @@
     <div class="wrap">
       <h1>Batch Image Resizer</h1>
       <div class="sub">
-        여러 이미지를 동시에 업로드 → 동일한 %로 일괄 리사이즈 → 순차 다운로드
+        여러 이미지를 동시에 업로드 → 동일한 %로 일괄 리사이즈 → 다운로드/공유
         (서버 없음)
       </div>
 
       <div class="grid">
-        <!-- LEFT: 업로드 + 리스트 -->
+        <!-- LEFT -->
         <section class="card">
           <h2>1) 이미지 업로드</h2>
           <div class="content">
@@ -334,7 +329,7 @@
           </div>
         </section>
 
-        <!-- RIGHT: 설정 -->
+        <!-- RIGHT -->
         <section class="card">
           <h2>2) 일괄 리사이징 설정</h2>
           <div class="content">
@@ -345,8 +340,8 @@
                 <div class="pill"><b id="scaleVal" class="mono">50%</b></div>
               </div>
               <div class="help">
-                예) 50%를 선택하면, 각 이미지의 (원본W×0.5, 원본H×0.5)로
-                변환됩니다. 원본 크기가 모두 달라도 문제 없습니다.
+                50% 선택 시 각 이미지별로 원본의 가로/세로를 각각 절반으로
+                변환합니다.
               </div>
             </div>
 
@@ -372,9 +367,9 @@
                 <input id="pattern" type="text" value="{name}_{scale}pct" />
               </div>
               <div class="help">
-                사용 가능 변수: <span class="mono">{name}</span> (원본 파일명),
-                <span class="mono">{scale}</span> (퍼센트) <br />예:
-                {name}_{scale}pct → IMG_0001_50pct.jpg
+                변수: <span class="mono">{name}</span>,
+                <span class="mono">{scale}</span>
+                예) {name}_{scale}pct
               </div>
             </div>
 
@@ -407,14 +402,20 @@
               <button id="applyOne" class="btn secondary" type="button">
                 선택 파일 변환 미리보기
               </button>
+              <button id="shareOne" class="btn secondary" type="button">
+                선택 파일 공유
+              </button>
+              <button id="shareAll" class="btn secondary" type="button">
+                전체 파일 공유
+              </button>
               <button id="downloadAll" class="btn" type="button">
                 전체 파일 변환 & 다운로드
               </button>
             </div>
 
             <div class="help" style="margin-top: 10px">
-              브라우저 정책상 파일이 많으면 다운로드가 여러 번 뜰 수 있습니다.
-              (ZIP 없음)
+              전체 공유는 1장씩 순차 공유창이 열립니다. (브라우저 정책상 이것이
+              가장 안정적입니다)
             </div>
           </div>
         </section>
@@ -473,22 +474,14 @@
         return "img";
       }
 
-      function fmtBytes(bytes) {
-        const units = ["B", "KB", "MB", "GB"];
-        let n = bytes,
-          i = 0;
-        while (n >= 1024 && i < units.length - 1) {
-          n /= 1024;
-          i++;
-        }
-        return `${n.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
-      }
-
       function updateCount() {
         $("count").textContent = String(files.length);
-        $("downloadAll").disabled = files.length === 0;
-        $("applyOne").disabled = files.length === 0 || !selectedId;
-        $("clear").disabled = files.length === 0;
+        const has = files.length > 0;
+        $("downloadAll").disabled = !has;
+        $("shareAll").disabled = !has;
+        $("applyOne").disabled = !has || !selectedId;
+        $("shareOne").disabled = !has || !selectedId;
+        $("clear").disabled = !has;
       }
 
       function renderList() {
@@ -513,7 +506,7 @@
           const left = document.createElement("div");
           left.innerHTML = `
       <div class="name">${it.file.name}</div>
-      <div class="meta mono">${it.w}x${it.h} · ${fmtBytes(it.file.size)} · ${it.file.type}</div>
+      <div class="meta mono">${it.w}x${it.h} · ${it.file.type}</div>
     `;
 
           const right = document.createElement("div");
@@ -589,7 +582,6 @@
         }
 
         setInPreview(it);
-        $("applyOne").disabled = false;
         updateExample();
       }
 
@@ -626,7 +618,6 @@
           return;
         }
 
-        // 순차 처리 (메모리/CPU 급격 상승 방지)
         for (const file of add) {
           try {
             const bitmap = await createImageBitmap(file);
@@ -648,7 +639,6 @@
           }
         }
 
-        // 선택 파일 없으면 첫 파일 자동 선택
         if (!selectedId && files.length > 0) {
           selectedId = files[0].id;
           setInPreview(files[0]);
@@ -714,6 +704,103 @@
         }
       }
 
+      async function shareBlob(blob, filename) {
+        const file = new File([blob], filename, { type: blob.type });
+
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: "이미지 공유",
+            text: "갤러리/Google Photos에 저장하거나 공유하세요.",
+            files: [file],
+          });
+        } else {
+          throw new Error("Web Share API not supported");
+        }
+      }
+
+      async function shareSelected() {
+        if (!selectedId) {
+          showToast("공유할 파일을 선택하세요.", true);
+          return;
+        }
+        const it = files.find((x) => x.id === selectedId);
+        if (!it) return;
+
+        const scale = parseInt($("scale").value, 10);
+        const fmt = $("fmt").value;
+        const ext = extFromMime(fmt);
+
+        try {
+          const { blob } = await convertOne(it);
+          const outBase =
+            makeOutName(it.nameNoExt, scale)
+              .replace(/[\\/:*?"<>|]+/g, "_")
+              .trim() || it.nameNoExt;
+          const filename = `${outBase}.${ext}`;
+
+          await shareBlob(blob, filename);
+          showToast("공유 창을 열었습니다.");
+        } catch (e) {
+          console.error(e);
+          showToast("이 브라우저는 파일 공유를 지원하지 않습니다.", true);
+        }
+      }
+
+      async function shareAll() {
+        if (files.length === 0) {
+          showToast("공유할 파일이 없습니다.", true);
+          return;
+        }
+
+        // 버튼 잠금
+        $("shareAll").disabled = true;
+        $("shareOne").disabled = true;
+        $("applyOne").disabled = true;
+        $("downloadAll").disabled = true;
+
+        const scale = parseInt($("scale").value, 10);
+        const fmt = $("fmt").value;
+        const ext = extFromMime(fmt);
+
+        try {
+          // 지원 검사
+          if (!(navigator.canShare && navigator.share)) {
+            throw new Error("Web Share API not supported");
+          }
+
+          showToast("전체 공유 시작… (1장씩 공유창이 열립니다)");
+
+          for (let i = 0; i < files.length; i++) {
+            const it = files[i];
+            const { blob } = await convertOne(it);
+
+            const outBase =
+              makeOutName(it.nameNoExt, scale)
+                .replace(/[\\/:*?"<>|]+/g, "_")
+                .trim() || it.nameNoExt;
+            const filename = `${outBase}.${ext}`;
+
+            // 한 장 공유
+            await shareBlob(blob, filename);
+
+            // 사용자가 공유창을 닫고 돌아온 다음 다음으로 진행됨
+            // 약간 텀
+            await new Promise((r) => setTimeout(r, 120));
+          }
+
+          showToast("전체 공유가 완료되었습니다.");
+        } catch (e) {
+          console.error(e);
+          showToast("전체 공유를 지원하지 않는 브라우저입니다.", true);
+        } finally {
+          // 버튼 복구
+          $("shareAll").disabled = files.length === 0;
+          $("shareOne").disabled = files.length === 0 || !selectedId;
+          $("applyOne").disabled = files.length === 0 || !selectedId;
+          $("downloadAll").disabled = files.length === 0;
+        }
+      }
+
       function downloadBlob(blob, filename) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -725,7 +812,6 @@
         setTimeout(() => URL.revokeObjectURL(url), 1500);
       }
 
-      // 전체 다운로드: 순차 변환+다운로드
       async function downloadAll() {
         if (files.length === 0) {
           showToast("다운로드할 파일이 없습니다.", true);
@@ -734,6 +820,8 @@
 
         $("downloadAll").disabled = true;
         $("applyOne").disabled = true;
+        $("shareOne").disabled = true;
+        $("shareAll").disabled = true;
 
         const scale = parseInt($("scale").value, 10);
         const fmt = $("fmt").value;
@@ -753,7 +841,6 @@
             const filename = `${outBase}.${ext}`;
             downloadBlob(blob, filename);
 
-            // 브라우저 다운로드 이벤트가 연속으로 너무 빨리 발생하면 차단될 수 있어 약간 텀
             await new Promise((r) => setTimeout(r, 220));
           }
 
@@ -762,8 +849,10 @@
           console.error(e);
           showToast("전체 변환 중 오류 발생", true);
         } finally {
-          $("downloadAll").disabled = false;
+          $("downloadAll").disabled = files.length === 0;
           $("applyOne").disabled = files.length === 0 || !selectedId;
+          $("shareOne").disabled = files.length === 0 || !selectedId;
+          $("shareAll").disabled = files.length === 0;
         }
       }
 
@@ -812,7 +901,11 @@
       });
 
       $("applyOne").addEventListener("click", previewSelected);
+      $("shareOne").addEventListener("click", shareSelected);
+      $("shareAll").addEventListener("click", shareAll);
       $("downloadAll").addEventListener("click", downloadAll);
+
+      $("clear").disabled = true;
 
       // init
       $("scaleVal").textContent = $("scale").value + "%";
@@ -822,7 +915,8 @@
       updateExample();
       $("downloadAll").disabled = true;
       $("applyOne").disabled = true;
-      $("clear").disabled = true;
+      $("shareOne").disabled = true;
+      $("shareAll").disabled = true;
     </script>
   </body>
 </html>
